@@ -1,0 +1,25 @@
+# Render Blueprint: New → Blueprint → pick this repo. Creates the free signaling server.
+services:
+  - type: web
+    name: omi-rtc-server
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: TRUST_PROXY
+        value: "1"
+      # Your Vercel URL, e.g. https://omi-rtc.vercel.app (Render asks for it on first deploy)
+      - key: CLIENT_ORIGIN
+        sync: false
+      # Optional TURN relay; leave blank for STUN only
+      - key: TURN_URLS
+        sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_CREDENTIAL
+        sync: false
