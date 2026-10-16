@@ -70,6 +70,20 @@ The server never touches audio or video. It only introduces two browsers to each
 - **Mute/camera off** set `track.enabled = false`, which sends silence or black frames without renegotiating.
 - **Cleanup**: on Next/Stop/partner-left we `pc.close()`. When you leave the chat page we also `track.stop()` every local track, so the camera light turns off.
 
+## Private rooms (call a friend)
+
+Besides random matching, two people can meet on purpose:
+
+1. One person clicks **Generate room ID** and gets a one-time code like `K7Q2XM` with a Copy button.
+2. They share it. The friend types it into **Enter room ID** and clicks **Join**.
+3. Both are connected 1-on-1. From here it's the same WebRTC flow and the same chat, mute and report controls.
+
+Rules, enforced on the server (`server/matchmaker.js` `createRoom`/`joinRoom`):
+- **Single use, 2 people max**: the code is deleted the moment someone joins, so a third person gets "Room not found".
+- **One room per person**: you can't generate a new ID while you're in a call or already have an open one.
+- **No random fallback**: Next is hidden. When either person leaves, the call ends for both, and the room closes if the host leaves before anyone joins.
+- Codes use 6 characters from a 31-character alphabet without look-alikes (no 0/O, 1/I/L), which gives about 887 million combinations. `room:create`/`room:join` are limited to 10 attempts per minute per IP, so guessing codes isn't practical.
+
 ## Safety features
 
 | Feature | Where |
