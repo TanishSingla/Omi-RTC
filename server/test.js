@@ -48,13 +48,14 @@ test('server: match, signal relay, chat filter, next, report', { timeout: 10_000
   t.after(() => [a, b, c].forEach((s) => s.close()))
   await Promise.all([a, b, c].map((s) => once(s, 'connect')))
 
-  // a waits, b arrives -> b is the initiator
-  a.emit('find')
+  // a and b both look for someone. Separate sockets have no ordering guarantee,
+  // so either may arrive second; whoever does is the initiator. Exactly one must be.
   const aMatched = once(a, 'matched')
   const bMatched = once(b, 'matched')
+  a.emit('find')
   b.emit('find')
-  assert.deepEqual(await bMatched, { initiator: true })
-  assert.deepEqual(await aMatched, { initiator: false })
+  const [ma, mb] = await Promise.all([aMatched, bMatched])
+  assert.notEqual(ma.initiator, mb.initiator, 'exactly one side makes the offer')
 
   // signals are relayed untouched
   const sig = once(a, 'signal')
