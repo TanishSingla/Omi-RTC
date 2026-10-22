@@ -20,6 +20,9 @@ import { socket } from './socket'
 
 export type Status = 'idle' | 'searching' | 'connecting' | 'connected'
 export type Message = { from: 'me' | 'stranger' | 'system'; text: string }
+// random: Omegle-style queue. host: get a one-time room ID to share. join: use a friend's ID.
+export type Mode = { type: 'random' } | { type: 'host' } | { type: 'join'; code: string }
+type RoomResult = { code?: string; error?: string }
 type Signal = { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit }
 
 const FALLBACK_ICE: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }]
@@ -42,7 +45,8 @@ async function getMedia(): Promise<{ stream?: MediaStream; error?: string }> {
   }
 }
 
-export function useVideoChat() {
+export function useVideoChat(mode: Mode) {
+  const isPrivate = mode.type !== 'random'
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null)
   const [mediaError, setMediaError] = useState<string | null>(null)
@@ -50,6 +54,8 @@ export function useVideoChat() {
   const [messages, setMessages] = useState<Message[]>([])
   const [micOn, setMicOn] = useState(true)
   const [camOn, setCamOn] = useState(true)
+  const [roomCode, setRoomCode] = useState<string | null>(null) // host: the ID to share
+  const [notice, setNotice] = useState<string | null>(null) // why a private call ended
 
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const localRef = useRef<MediaStream | null>(null)
@@ -79,14 +85,37 @@ export function useVideoChat() {
     socket.emit(event)
   }
 
+  // Private calls don't fall back to random matching; they just end.
+  const endCall = (reason: string) => {
+    closePeer()
+    setRoomCode(null)
+    setStatus('idle')
+    setNotice(reason)
+  }
+
+  // Step 2: random -> join the queue. host -> get a room ID. join -> enter the friend's room.
+  const begin = async (isCancelled: () => boolean) => {
+    setStatus('searching')
+    // Buffered by Socket.IO until connected, so this also waits out a cold start.
+    iceServers.current = await socket.emitWithAck('ice').catch(() => FALLBACK_ICE)
+    if (isCancelled()) return
+    if (mode.type === 'random') return search('find')
+    const res: RoomResult =
+      mode.type === 'host' ? await socket.emitWithAck('room:create') : await socket.emitWithAck('room:join', mode.code)
+    if (isCancelled()) return
+    if (res.error) endCall(res.error)
+    else if (res.code) setRoomCode(res.code)
+  }
+
   useEffect(() => {
     let cancelled = false
 
     // Step 3: we've been paired.
     const onMatched = async ({ initiator }: { initiator: boolean }) => {
       closePeer()
+      setRoomCode(null) // the ID is used up now
       setStatus('connecting')
-      addMessage('system', "You're now chatting with a stranger. Say hi!")
+      addMessage('system', isPrivate ? 'Your friend joined. Say hi!' : "You're now chatting with a stranger. Say hi!")
 
       const pc = new RTCPeerConnection({ iceServers: iceServers.current })
       pcRef.current = pc
@@ -101,6 +130,7 @@ export function useVideoChat() {
         if (pc.connectionState === 'connected') setStatus('connected')
         // 'failed' = no candidate pair worked (often: strict NAT and no TURN configured).
         if (pc.connectionState === 'failed') {
+          if (isPrivate) return endCall('Could not connect to your friend. One of your networks may block direct calls (needs a TURN server).')
           search('next')
           addMessage('system', 'Connection failed. Finding someone else…')
         }
@@ -142,6 +172,7 @@ export function useVideoChat() {
     }
 
     const onPartnerLeft = () => {
+      if (isPrivate) return endCall('Your friend left the call.')
       search('find')
       addMessage('system', 'Stranger disconnected. Finding someone new…')
     }
@@ -160,6 +191,7 @@ export function useVideoChat() {
 
     // Server restarted / network dropped: matchmaking state is gone, start over.
     const onDisconnect = () => {
+      if (isPrivate) return endCall('Lost connection to the server.')
       closePeer()
       setStatus('idle')
       addMessage('system', 'Lost connection to the server. Press Start when it is back.')
@@ -180,10 +212,7 @@ export function useVideoChat() {
       if (!stream) return setMediaError(error!)
       localRef.current = stream
       setLocalStream(stream)
-      setStatus('searching')
-      // Buffered by Socket.IO until connected, so this also waits out a cold start.
-      iceServers.current = await socket.emitWithAck('ice').catch(() => FALLBACK_ICE)
-      if (!cancelled) search('find')
+      begin(() => cancelled)
     })()
 
     return () => {
@@ -200,6 +229,8 @@ export function useVideoChat() {
       localRef.current?.getTracks().forEach((t) => t.stop())
       localRef.current = null
     }
+    // Runs once per chat page. `mode` can't change while mounted (App remounts Chat for a new mode).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Optional automated-moderation sampling while in a call.
@@ -216,6 +247,9 @@ export function useVideoChat() {
     messages,
     micOn,
     camOn,
+    isPrivate,
+    roomCode,
+    notice,
 
     async retryMedia() {
       setMediaError(null)
@@ -223,7 +257,7 @@ export function useVideoChat() {
       if (!stream) return setMediaError(error!)
       localRef.current = stream
       setLocalStream(stream)
-      search('find')
+      begin(() => false)
     },
     start: () => search('find'),
     next: () => search('next'),
@@ -233,10 +267,11 @@ export function useVideoChat() {
       socket.emit('stop')
     },
     report() {
-      if (!confirm('Report this stranger for breaking the rules? You will be moved to someone new.')) return
+      const after = isPrivate ? 'The call will end.' : 'You will be moved to someone new.'
+      if (!confirm(`Report this person for breaking the rules? ${after}`)) return
       socket.emit('report', 'user report')
-      closePeer()
-      setStatus('searching') // the server re-queues us
+      if (isPrivate) return endCall("Reported. Thanks, the call has ended.")
+      search('find')
       setMessages([{ from: 'system', text: "Thanks, they've been reported and you won't be matched with them again." }])
     },
     sendChat(text: string) {

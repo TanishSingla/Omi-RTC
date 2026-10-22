@@ -3,6 +3,10 @@
 //
 // ponytail: single process only. Two server instances would each have their own
 // queue; move this state to Redis when you need more than one instance.
+import { randomInt } from 'node:crypto'
+
+// Room codes skip look-alike characters (0/O, 1/I/L) so they're easy to read out.
+const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 
 export class Matchmaker {
   constructor({ avoidMs = 10 * 60_000 } = {}) {
@@ -10,6 +14,8 @@ export class Matchmaker {
     this.partners = new Map() // id -> partner id. Each pair is a private "room" of two.
     this.avoid = new Map() // id -> Map(otherId -> expiresAt): people this id skipped/reported
     this.avoidMs = avoidMs
+    this.rooms = new Map() // private room code -> host id, waiting for exactly one guest
+    this.roomOf = new Map() // host id -> their open room code
   }
 
   // Put `id` in the queue, or pair it with the first compatible waiting user.
@@ -23,14 +29,47 @@ export class Matchmaker {
       return null
     }
     const [partner] = this.queue.splice(i, 1)
-    this.partners.set(id, partner)
-    this.partners.set(partner, id)
+    this.pair(id, partner)
     return partner
   }
 
-  // Leave the queue and/or the current pair. Returns the old partner id (or null).
+  pair(a, b) {
+    this.partners.set(a, b)
+    this.partners.set(b, a)
+  }
+
+  // Private rooms: the host gets a one-time code; the first guest to use it is paired
+  // with the host and the code is deleted, so a room never holds more than 2 people.
+  // Returns null if `id` is already in a call or already holds an open code.
+  createRoom(id) {
+    if (this.partners.has(id) || this.roomOf.has(id)) return null
+    this.queue = this.queue.filter((q) => q !== id)
+    let code
+    do code = Array.from({ length: 6 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join('')
+    while (this.rooms.has(code))
+    this.rooms.set(code, id)
+    this.roomOf.set(id, code)
+    return code
+  }
+
+  // Returns { host } on success or { error }. Caller must have made `id` leave() first.
+  joinRoom(code, id) {
+    const host = this.rooms.get(code)
+    if (!host) return { error: 'Room not found. It may have been used already or closed.' }
+    this.closeRoom(host)
+    this.pair(host, id)
+    return { host }
+  }
+
+  closeRoom(id) {
+    this.rooms.delete(this.roomOf.get(id))
+    this.roomOf.delete(id)
+  }
+
+  // Leave the queue, the current pair, and close any open room. Returns the old partner id (or null).
   leave(id) {
     this.queue = this.queue.filter((q) => q !== id)
+    this.closeRoom(id)
     const partner = this.partners.get(id) ?? null
     if (partner) {
       this.partners.delete(id)

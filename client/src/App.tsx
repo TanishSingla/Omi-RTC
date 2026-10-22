@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { Mode } from '@/lib/useVideoChat'
 import { Chat } from '@/pages/Chat'
 import { Landing } from '@/pages/Landing'
 import { Terms } from '@/pages/Terms'
@@ -7,7 +8,7 @@ import { Terms } from '@/pages/Terms'
 // vs chat is plain state, so refreshing during a chat lands back on the age gate.
 export default function App() {
   const [hash, setHash] = useState(location.hash)
-  const [chatting, setChatting] = useState(false)
+  const [mode, setMode] = useState<Mode | null>(null)
 
   useEffect(() => {
     const onHash = () => setHash(location.hash)
@@ -16,6 +17,6 @@ export default function App() {
   }, [])
 
   if (hash === '#/terms') return <Terms />
-  if (chatting) return <Chat onExit={() => setChatting(false)} />
-  return <Landing onStart={() => setChatting(true)} />
+  if (mode) return <Chat mode={mode} onExit={() => setMode(null)} />
+  return <Landing onStart={setMode} />
 }

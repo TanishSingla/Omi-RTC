@@ -26,6 +26,21 @@ test('matchmaker pairs, leaves, and avoids skipped users', () => {
   assert.equal(mm.enqueue('b', 2000), 'a', 'avoidance expires')
 })
 
+test('private rooms: one-time code, max 2 people, one room per host', () => {
+  const mm = new Matchmaker()
+  const code = mm.createRoom('host')
+  assert.match(code, /^[A-Z2-9]{6}$/)
+  assert.equal(mm.createRoom('host'), null, 'host cannot open a second room')
+  assert.deepEqual(mm.joinRoom(code, 'guest'), { host: 'host' })
+  assert.equal(mm.partners.get('host'), 'guest')
+  assert.ok(mm.joinRoom(code, 'third').error, 'code is single-use')
+  assert.equal(mm.createRoom('host'), null, 'cannot create while in a call')
+  mm.leave('host')
+  const code2 = mm.createRoom('host')
+  mm.leave('host')
+  assert.ok(mm.joinRoom(code2, 'guest2').error, 'leaving closes the room')
+})
+
 test('profanity filter masks whole words only', () => {
   assert.equal(cleanText('what the fuck, shitty'), 'what the ****, ******')
   assert.equal(cleanText('Scunthorpe classic dickens'), 'Scunthorpe classic dickens')
@@ -91,6 +106,23 @@ test('server: match, signal relay, chat filter, next, report', { timeout: 10_000
   assert.equal(entry.reporter, c.id)
   assert.equal(entry.reported, b.id)
   assert.ok(entry.time)
+
+  // private room: d hosts, e joins, they're paired; f can't reuse the code
+  const [d, e, f] = [connect(), connect(), connect()]
+  t.after(() => [d, e, f].forEach((s) => s.close()))
+  await Promise.all([d, e, f].map((s) => once(s, 'connect')))
+  const { code } = await d.emitWithAck('room:create')
+  assert.match(code, /^[A-Z2-9]{6}$/)
+  assert.ok((await d.emitWithAck('room:create')).error, 'one open room per host')
+  const dMatched = once(d, 'matched')
+  const eMatched = once(e, 'matched')
+  assert.deepEqual(await e.emitWithAck('room:join', code.toLowerCase()), { ok: true })
+  assert.deepEqual(await eMatched, { initiator: true })
+  assert.deepEqual(await dMatched, { initiator: false })
+  assert.ok((await f.emitWithAck('room:join', code)).error, 'third person rejected')
+  const roomChat = once(d, 'chat')
+  e.emit('chat', 'hello friend')
+  assert.equal(await roomChat, 'hello friend')
 
   // "Next" spam gets rate-limited
   const limited = once(a, 'rate-limited')

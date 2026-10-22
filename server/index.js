@@ -45,6 +45,7 @@ const limits = {
   next: limiter(20, 60_000), // "Next" spam
   chat: limiter(20, 10_000),
   report: limiter(5, 60_000),
+  room: limiter(10, 60_000), // create/join private rooms (also slows down code guessing)
   frame: limiter(30, 60_000),
 }
 
@@ -122,6 +123,26 @@ io.on('connection', (socket) => {
 
   socket.on('stop', () => leave())
 
+  // Private rooms. Both always ack, so the client never hangs waiting.
+  socket.on('room:create', (ack) => {
+    if (typeof ack !== 'function') return
+    if (!limits.room(ip)) return ack({ error: 'Too many attempts. Wait a minute and try again.' })
+    const code = mm.createRoom(socket.id)
+    ack(code ? { code } : { error: "You're already in a call or have an open room." })
+  })
+
+  socket.on('room:join', (code, ack) => {
+    if (typeof ack !== 'function') return
+    if (!limits.room(ip)) return ack({ error: 'Too many attempts. Wait a minute and try again.' })
+    leave()
+    const result = mm.joinRoom(String(code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, ''), socket.id)
+    if (result.error) return ack(result)
+    ack({ ok: true })
+    // Same as random matching from here: the joiner makes the offer.
+    socket.emit('matched', { initiator: true })
+    io.to(result.host).emit('matched', { initiator: false })
+  })
+
   // WebRTC signaling: opaque relay to the current partner only.
   socket.on('signal', (data) => {
     const partner = partnerOf()
@@ -147,8 +168,7 @@ io.on('connection', (socket) => {
       reportedIp: io.sockets.sockets.get(partner)?.data.ip,
       reason: String(reason ?? '').slice(0, 200),
     })
-    leave({ avoid: true })
-    find()
+    leave({ avoid: true }) // the client decides what's next (random: find again, private: end)
   })
 
   // Automated moderation hook (client sends nothing unless VITE_FRAME_SAMPLE_MS is set).

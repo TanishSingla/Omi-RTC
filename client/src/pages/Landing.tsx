@@ -1,10 +1,12 @@
 import { useState } from 'react'
-import { ShieldCheck, Video } from 'lucide-react'
+import { LogIn, Plus, ShieldCheck, Video } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import type { Mode } from '@/lib/useVideoChat'
 
 const RULES = [
   'You must be 18 or older.',
@@ -14,8 +16,9 @@ const RULES = [
   'Use Report on anyone breaking the rules.',
 ]
 
-export function Landing({ onStart }: { onStart: () => void }) {
+export function Landing({ onStart }: { onStart: (mode: Mode) => void }) {
   const [agreed, setAgreed] = useState(false)
+  const [code, setCode] = useState('')
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -51,8 +54,36 @@ export function Landing({ onStart }: { onStart: () => void }) {
               </span>
             </Label>
 
-            <Button size="lg" className="h-11 w-full text-base" disabled={!agreed} onClick={onStart}>
+            <Button size="lg" className="h-11 w-full text-base" disabled={!agreed} onClick={() => onStart({ type: 'random' })}>
               <Video /> Start Chat
+            </Button>
+
+            {/* Private 1-on-1: one person generates an ID, the other enters it. */}
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="h-px flex-1 bg-border" /> or call a friend <span className="h-px flex-1 bg-border" />
+            </div>
+            <form
+              className="flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault()
+                onStart({ type: 'join', code })
+              }}
+            >
+              <Input
+                value={code}
+                onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                maxLength={6}
+                placeholder="Enter room ID"
+                aria-label="Room ID"
+                className="h-10 font-mono tracking-widest"
+                disabled={!agreed}
+              />
+              <Button type="submit" variant="secondary" className="h-10" disabled={!agreed || code.length !== 6}>
+                <LogIn /> Join
+              </Button>
+            </form>
+            <Button variant="outline" className="h-10 w-full" disabled={!agreed} onClick={() => onStart({ type: 'host' })}>
+              <Plus /> Generate room ID
             </Button>
           </CardContent>
         </Card>

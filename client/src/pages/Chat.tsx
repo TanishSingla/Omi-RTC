@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { CameraOff, Flag, Loader2, Mic, MicOff, Play, Send, SkipForward, Square, Video, VideoOff } from 'lucide-react'
+import { CameraOff, Check, Copy, Flag, Loader2, Mic, MicOff, Phone, Play, Send, SkipForward, Square, Video, VideoOff } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { useVideoChat, type Message } from '@/lib/useVideoChat'
+import { useVideoChat, type Message, type Mode } from '@/lib/useVideoChat'
 import { cn } from '@/lib/utils'
 
 function VideoView({ stream, muted, className }: { stream: MediaStream | null; muted?: boolean; className?: string }) {
@@ -15,8 +15,28 @@ function VideoView({ stream, muted, className }: { stream: MediaStream | null; m
   return <video ref={ref} autoPlay playsInline muted={muted} className={cn('size-full object-cover', className)} />
 }
 
-export function Chat({ onExit }: { onExit: () => void }) {
-  const chat = useVideoChat()
+function RoomCode({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div className="max-w-xs space-y-3">
+      <p>Share this room ID with your friend:</p>
+      <p className="font-mono text-3xl font-semibold tracking-[0.3em] text-foreground">{code}</p>
+      <Button
+        variant="outline"
+        onClick={() => navigator.clipboard.writeText(code).then(() => setCopied(true))}
+      >
+        {copied ? <Check /> : <Copy />} {copied ? 'Copied' : 'Copy ID'}
+      </Button>
+      <p className="flex items-center justify-center gap-2">
+        <Loader2 className="size-4 animate-spin" /> Waiting for your friend…
+      </p>
+      <p className="text-xs">The ID works once, for one person.</p>
+    </div>
+  )
+}
+
+export function Chat({ mode, onExit }: { mode: Mode; onExit: () => void }) {
+  const chat = useVideoChat(mode)
   const { status, mediaError } = chat
   const inCall = status === 'connecting' || status === 'connected'
 
@@ -39,12 +59,27 @@ export function Chat({ onExit }: { onExit: () => void }) {
                       Try again
                     </Button>
                   </div>
+                ) : chat.roomCode ? (
+                  <RoomCode code={chat.roomCode} />
+                ) : status === 'idle' && chat.isPrivate ? (
+                  <div className="space-y-3">
+                    <p>{chat.notice ?? 'The call has ended.'}</p>
+                    <Button variant="outline" onClick={onExit}>
+                      Back to home
+                    </Button>
+                  </div>
                 ) : status === 'idle' ? (
                   <p>Press Start to meet someone new.</p>
                 ) : (
                   <p className="flex items-center gap-2">
                     <Loader2 className="size-4 animate-spin" />
-                    {status === 'searching' ? 'Looking for a stranger…' : 'Connecting…'}
+                    {status === 'connecting'
+                      ? 'Connecting…'
+                      : mode.type === 'join'
+                        ? "Joining your friend's room…"
+                        : mode.type === 'host'
+                          ? 'Creating your room…'
+                          : 'Looking for a stranger…'}
                   </p>
                 )}
               </div>
@@ -63,7 +98,7 @@ export function Chat({ onExit }: { onExit: () => void }) {
             )}
           </div>
 
-          <Controls chat={chat} disabled={!chat.localStream} />
+          <Controls chat={chat} disabled={!chat.localStream} onExit={onExit} />
         </section>
 
         <ChatPanel messages={chat.messages} onSend={chat.sendChat} enabled={inCall} />
@@ -72,12 +107,25 @@ export function Chat({ onExit }: { onExit: () => void }) {
   )
 }
 
-function Controls({ chat, disabled }: { chat: ReturnType<typeof useVideoChat>; disabled: boolean }) {
+function Controls({
+  chat,
+  disabled,
+  onExit,
+}: {
+  chat: ReturnType<typeof useVideoChat>
+  disabled: boolean
+  onExit: () => void
+}) {
   const idle = chat.status === 'idle'
   const inCall = chat.status === 'connecting' || chat.status === 'connected'
   return (
     <div className="flex flex-wrap items-center justify-center gap-2">
-      {idle ? (
+      {chat.isPrivate ? (
+        // Private calls have no Next/Start: leaving ends the call for both.
+        <Button size="lg" variant="destructive" className="h-11 min-w-28" onClick={onExit}>
+          <Phone className="rotate-[135deg]" /> {inCall ? 'End call' : 'Leave'}
+        </Button>
+      ) : idle ? (
         <Button size="lg" className="h-11 min-w-28" onClick={chat.start} disabled={disabled}>
           <Play /> Start
         </Button>
@@ -86,9 +134,11 @@ function Controls({ chat, disabled }: { chat: ReturnType<typeof useVideoChat>; d
           <SkipForward /> Next
         </Button>
       )}
-      <Button size="lg" variant="secondary" className="h-11" onClick={chat.stop} disabled={disabled || idle}>
-        <Square /> <span className="hidden sm:inline">Stop</span>
-      </Button>
+      {!chat.isPrivate && (
+        <Button size="lg" variant="secondary" className="h-11" onClick={chat.stop} disabled={disabled || idle}>
+          <Square /> <span className="hidden sm:inline">Stop</span>
+        </Button>
+      )}
       <Button
         size="icon-lg"
         variant={chat.micOn ? 'secondary' : 'destructive'}
@@ -158,7 +208,7 @@ function ChatPanel({ messages, onSend, enabled }: { messages: Message[]; onSend:
           value={text}
           onChange={(e) => setText(e.target.value)}
           maxLength={500}
-          placeholder={enabled ? 'Type a message…' : 'Waiting for a stranger…'}
+          placeholder={enabled ? 'Type a message…' : 'Chat opens once connected'}
           disabled={!enabled}
           aria-label="Message"
         />
